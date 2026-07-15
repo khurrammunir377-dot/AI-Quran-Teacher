@@ -1,0 +1,69 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+	uses: subosito/flutter-action@v2
+  	with:
+    	flutter-version: '3.27.x'
+    	channel: 'stable'
+        cache: true
+
+      - name: Flutter doctor
+        run: flutter doctor -v
+
+      - name: Scaffold Android platform folder
+        # Generates android/ fresh (gradlew, MainActivity, build.gradle, etc.)
+        # matched to this exact Flutter version, without touching our existing
+        # lib/, pubspec.yaml, or assets/.
+        run: flutter create --platforms=android --project-name hifz_companion --org com.hifzcompanion .
+
+      - name: Apply custom Android manifest and app icons
+        run: |
+          cp -f android_overlay/app/src/main/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          cp -rf android_overlay/app/src/main/res/mipmap-mdpi/. android/app/src/main/res/mipmap-mdpi/
+          cp -rf android_overlay/app/src/main/res/mipmap-hdpi/. android/app/src/main/res/mipmap-hdpi/
+          cp -rf android_overlay/app/src/main/res/mipmap-xhdpi/. android/app/src/main/res/mipmap-xhdpi/
+          cp -rf android_overlay/app/src/main/res/mipmap-xxhdpi/. android/app/src/main/res/mipmap-xxhdpi/
+          cp -rf android_overlay/app/src/main/res/mipmap-xxxhdpi/. android/app/src/main/res/mipmap-xxxhdpi/
+
+      - name: Force compileSdk/targetSdk 35 (required by audioplayers_android)
+        run: |
+          GRADLE_FILE="android/app/build.gradle"
+          if [ -f "android/app/build.gradle.kts" ]; then
+            GRADLE_FILE="android/app/build.gradle.kts"
+          fi
+          echo "Patching $GRADLE_FILE"
+          sed -i -E 's/compileSdk[[:space:]]*=?[[:space:]]*flutter\.compileSdkVersion/compileSdk = 35/' "$GRADLE_FILE"
+          sed -i -E 's/targetSdk[[:space:]]*=?[[:space:]]*flutter\.targetSdkVersion/targetSdk = 35/' "$GRADLE_FILE"
+          echo "----- Resulting compileSdk/targetSdk lines -----"
+          grep -E "compileSdk|targetSdk" "$GRADLE_FILE"
+
+      - name: Get Flutter packages
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hifz-companion-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30

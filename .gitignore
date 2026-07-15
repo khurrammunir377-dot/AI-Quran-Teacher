@@ -1,0 +1,20 @@
+# Flutter/Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+*.iml
+
+# Android (generated fresh by CI via `flutter create`, so not committed)
+android/
+!android_overlay/
+
+# IDE
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
