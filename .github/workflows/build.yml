@@ -29,8 +29,6 @@ jobs:
         run: flutter doctor -v
 
       - name: Scaffold Android platform folder
-        # Adding explicitly clear platform filters stops Flutter from parsing 
-        # desktop linux dependencies during package resolution phases.
         run: flutter create --platforms=android --project-name hifz_companion --org com.hifzcompanion .
 
       - name: Apply custom Android manifest and app icons
@@ -65,7 +63,9 @@ jobs:
         run: flutter pub get
 
       - name: Build release APK
-        run: flutter build apk --release
+        # Added targeted compiler features to drop native Linux code layers 
+        # from your target package tree entirely.
+        run: flutter build apk --release --target-platform android-arm,android-arm64,android-x64
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
