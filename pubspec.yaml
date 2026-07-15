@@ -19,6 +19,12 @@ dependencies:
   shared_preferences: ^2.2.0
   cupertino_icons: ^1.0.8
 
+dependency_overrides:
+  # Forces the compiler to pull matching modern versions of the internal platform 
+  # interface scripts, stopping the record_linux compilation crash completely.
+  record_platform_interface: ^1.6.1
+  record_linux: ^1.3.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
