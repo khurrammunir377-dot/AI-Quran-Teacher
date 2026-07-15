@@ -40,13 +40,16 @@ jobs:
           cp -rf android_overlay/app/src/main/res/mipmap-xxhdpi/. android/app/src/main/res/mipmap-xxhdpi/
           cp -rf android_overlay/app/src/main/res/mipmap-xxxhdpi/. android/app/src/main/res/mipmap-xxxhdpi/
 
-      - name: Force Custom SDK Properties Globally
+      - name: Force Global Android SDK Properties via local.properties
         run: |
-          # Inject straight compilation overrides into the subprojects block safely
-          # without using the afterEvaluate hook that breaks Flutter 3.27 build streams
-          echo "subprojects { project.evaluationDependsOn(':app'); if (project.hasProperty('android')) { project.android { compileSdkVersion 35; defaultConfig { targetSdkVersion 35 } } } }" >> android/build.gradle
+          # Inject configurations straight into local.properties which Flutter native scripts
+          # read immediately when loading plugin subprojects
+          cd android
+          echo "flutter.compileSdkVersion=35" >> local.properties
+          echo "flutter.targetSdkVersion=35" >> local.properties
+          echo "flutter.minSdkVersion=21" >> local.properties
 
-      - name: Force compileSdk/targetSdk 35 (required by audioplayers_android)
+      - name: Force compileSdk/targetSdk 35 inside app config
         run: |
           GRADLE_FILE="android/app/build.gradle"
           if [ -f "android/app/build.gradle.kts" ]; then
