@@ -29,6 +29,8 @@ jobs:
         run: flutter doctor -v
 
       - name: Scaffold Android platform folder
+        # Adding explicitly clear platform filters stops Flutter from parsing 
+        # desktop linux dependencies during package resolution phases.
         run: flutter create --platforms=android --project-name hifz_companion --org com.hifzcompanion .
 
       - name: Apply custom Android manifest and app icons
@@ -42,8 +44,6 @@ jobs:
 
       - name: Force Global Android SDK Properties via local.properties
         run: |
-          # Inject configurations straight into local.properties which Flutter native scripts
-          # read immediately when loading plugin subprojects
           cd android
           echo "flutter.compileSdkVersion=35" >> local.properties
           echo "flutter.targetSdkVersion=35" >> local.properties
