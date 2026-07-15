@@ -19,19 +19,16 @@ jobs:
           java-version: '17'
 
       - name: Set up Flutter
-	uses: subosito/flutter-action@v2
-  	with:
-    	flutter-version: '3.27.x'
-    	channel: 'stable'
-        cache: true
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.x'
+          channel: 'stable'
+          cache: true
 
       - name: Flutter doctor
         run: flutter doctor -v
 
       - name: Scaffold Android platform folder
-        # Generates android/ fresh (gradlew, MainActivity, build.gradle, etc.)
-        # matched to this exact Flutter version, without touching our existing
-        # lib/, pubspec.yaml, or assets/.
         run: flutter create --platforms=android --project-name hifz_companion --org com.hifzcompanion .
 
       - name: Apply custom Android manifest and app icons
@@ -42,6 +39,12 @@ jobs:
           cp -rf android_overlay/app/src/main/res/mipmap-xhdpi/. android/app/src/main/res/mipmap-xhdpi/
           cp -rf android_overlay/app/src/main/res/mipmap-xxhdpi/. android/app/src/main/res/mipmap-xxhdpi/
           cp -rf android_overlay/app/src/main/res/mipmap-xxxhdpi/. android/app/src/main/res/mipmap-xxxhdpi/
+
+      - name: Patch Root build.gradle for record_android and audiplayer plugins
+        run: |
+          # Inject a fallback global compiler configuration block at the root level 
+          # to intercept missing evaluation listeners on subproject/dependency libraries.
+          echo "subprojects { afterEvaluate { project -> if (project.hasProperty('android')) { project.android { if (namespace == null) { namespace = project.group }; compileSdkVersion 35; defaultConfig { targetSdkVersion 35 } } } } }" >> android/build.gradle
 
       - name: Force compileSdk/targetSdk 35 (required by audioplayers_android)
         run: |
