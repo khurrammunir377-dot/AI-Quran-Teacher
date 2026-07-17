@@ -21,7 +21,6 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.27.x'
           channel: 'stable'
           cache: true
 
@@ -40,32 +39,48 @@ jobs:
           cp -rf android_overlay/app/src/main/res/mipmap-xxhdpi/. android/app/src/main/res/mipmap-xxhdpi/
           cp -rf android_overlay/app/src/main/res/mipmap-xxxhdpi/. android/app/src/main/res/mipmap-xxxhdpi/
 
-      - name: Force Global Android SDK Properties via local.properties
-        run: |
-          cd android
-          echo "flutter.compileSdkVersion=35" >> local.properties
-          echo "flutter.targetSdkVersion=35" >> local.properties
-          echo "flutter.minSdkVersion=21" >> local.properties
-
-      - name: Force compileSdk/targetSdk 35 inside app config
+      - name: Force compileSdk 35 / targetSdk 35 / minSdk 23 (required by audioplayers_android and record_android)
         run: |
           GRADLE_FILE="android/app/build.gradle"
+          IS_KTS=false
           if [ -f "android/app/build.gradle.kts" ]; then
             GRADLE_FILE="android/app/build.gradle.kts"
+            IS_KTS=true
           fi
-          echo "Patching $GRADLE_FILE"
-          sed -i -E 's/compileSdk[[:space:]]*=?[[:space:]]*flutter\.compileSdkVersion/compileSdk = 35/' "$GRADLE_FILE"
-          sed -i -E 's/targetSdk[[:space:]]*=?[[:space:]]*flutter\.targetSdkVersion/targetSdk = 35/' "$GRADLE_FILE"
-          echo "----- Resulting compileSdk/targetSdk lines -----"
-          grep -E "compileSdk|targetSdk" "$GRADLE_FILE"
+          echo "Appending SDK overrides to $GRADLE_FILE (kts=$IS_KTS)"
+          if [ "$IS_KTS" = true ]; then
+            cat >> "$GRADLE_FILE" << 'EOF'
+
+// --- Appended override: required minimum SDK levels for our plugins ---
+android {
+    compileSdk = 35
+    defaultConfig {
+        minSdk = 23
+        targetSdk = 35
+    }
+}
+EOF
+          else
+            cat >> "$GRADLE_FILE" << 'EOF'
+
+// --- Appended override: required minimum SDK levels for our plugins ---
+android {
+    compileSdkVersion 35
+    defaultConfig {
+        minSdkVersion 23
+        targetSdkVersion 35
+    }
+}
+EOF
+          fi
+          echo "----- Full $GRADLE_FILE after append -----"
+          cat "$GRADLE_FILE"
 
       - name: Get Flutter packages
         run: flutter pub get
 
       - name: Build release APK
-        # Added targeted compiler features to drop native Linux code layers 
-        # from your target package tree entirely.
-        run: flutter build apk --release --target-platform android-arm,android-arm64,android-x64
+        run: flutter build apk --release
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
