@@ -11,6 +11,28 @@ class SettingsService {
   static const _keyReferenceAudioEnabled = 'reference_audio_enabled';
   static const _keyLastSurah = 'last_surah';
   static const _keyLastAyah = 'last_ayah';
+  static const _keyRecognitionEndpoint = 'recognition_endpoint_url';
+  static const _keyInterruptionCueEnabled = 'interruption_cue_enabled';
+
+  Future<String> getRecognitionEndpoint() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyRecognitionEndpoint) ?? '';
+  }
+
+  Future<void> setRecognitionEndpoint(String url) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyRecognitionEndpoint, url);
+  }
+
+  Future<bool> getInterruptionCueEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyInterruptionCueEnabled) ?? true;
+  }
+
+  Future<void> setInterruptionCueEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyInterruptionCueEnabled, enabled);
+  }
 
   Future<ArabicFontSize> getFontSize() async {
     final prefs = await SharedPreferences.getInstance();

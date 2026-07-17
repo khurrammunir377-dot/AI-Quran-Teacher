@@ -1,9 +1,14 @@
-# Hifz Companion — Phase 1 (Foundation)
+# Hifz Companion — Phase 1 + Phase 2
 
-A free Quran memorization app. This is **Phase 1 only**: Quran text reading,
-Juz/Surah navigation, and offline audio recording. No mistake-detection yet —
-that's Phase 2, built on top of this once Phase 1 is confirmed working on
-your phone.
+A free Quran memorization app. **Phase 1** (reading, navigation, audio
+recording) plus **Phase 2** (live recitation checking: continuous
+listening, word-level mistake detection, real-time interruption cue) are
+both included in this build.
+
+**If you're setting up recitation checking for the first time, see
+[PHASE2_SETUP.md](PHASE2_SETUP.md) first** — it needs a small backend
+piece (Supabase + Groq) before the mic button on the Recitation Screen
+will do anything beyond recording.
 
 ## What's included
 
