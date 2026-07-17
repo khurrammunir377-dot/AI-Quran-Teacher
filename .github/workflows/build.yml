@@ -48,31 +48,25 @@ jobs:
             IS_KTS=true
           fi
           echo "Appending SDK overrides to $GRADLE_FILE (kts=$IS_KTS)"
-          if [ "$IS_KTS" = true ]; then
-            cat >> "$GRADLE_FILE" << 'EOF'
-
-// --- Appended override: required minimum SDK levels for our plugins ---
-android {
-    compileSdk = 35
-    defaultConfig {
-        minSdk = 23
-        targetSdk = 35
-    }
-}
-EOF
-          else
-            cat >> "$GRADLE_FILE" << 'EOF'
-
-// --- Appended override: required minimum SDK levels for our plugins ---
-android {
-    compileSdkVersion 35
-    defaultConfig {
-        minSdkVersion 23
-        targetSdkVersion 35
-    }
-}
-EOF
-          fi
+          {
+            echo ""
+            echo "// --- Appended override: required minimum SDK levels for our plugins ---"
+            echo "android {"
+            if [ "$IS_KTS" = true ]; then
+              echo "    compileSdk = 35"
+              echo "    defaultConfig {"
+              echo "        minSdk = 23"
+              echo "        targetSdk = 35"
+              echo "    }"
+            else
+              echo "    compileSdkVersion 35"
+              echo "    defaultConfig {"
+              echo "        minSdkVersion 23"
+              echo "        targetSdkVersion 35"
+              echo "    }"
+            fi
+            echo "}"
+          } >> "$GRADLE_FILE"
           echo "----- Full $GRADLE_FILE after append -----"
           cat "$GRADLE_FILE"
 
