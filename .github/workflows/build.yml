@@ -39,7 +39,7 @@ jobs:
           cp -rf android_overlay/app/src/main/res/mipmap-xxhdpi/. android/app/src/main/res/mipmap-xxhdpi/
           cp -rf android_overlay/app/src/main/res/mipmap-xxxhdpi/. android/app/src/main/res/mipmap-xxxhdpi/
 
-      - name: Force compileSdk 35 / targetSdk 35 / minSdk 23 (required by audioplayers_android and record_android)
+      - name: Force compileSdk 36 / targetSdk 36 / minSdk 23 (required by audioplayers_android and record_android)
         run: |
           GRADLE_FILE="android/app/build.gradle"
           IS_KTS=false
@@ -53,16 +53,16 @@ jobs:
             echo "// --- Appended override: required minimum SDK levels for our plugins ---"
             echo "android {"
             if [ "$IS_KTS" = true ]; then
-              echo "    compileSdk = 35"
+              echo "    compileSdk = 36"
               echo "    defaultConfig {"
               echo "        minSdk = 23"
-              echo "        targetSdk = 35"
+              echo "        targetSdk = 36"
               echo "    }"
             else
-              echo "    compileSdkVersion 35"
+              echo "    compileSdkVersion 36"
               echo "    defaultConfig {"
               echo "        minSdkVersion 23"
-              echo "        targetSdkVersion 35"
+              echo "        targetSdkVersion 36"
               echo "    }"
             fi
             echo "}"
