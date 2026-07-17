@@ -9,7 +9,7 @@ class DbHelper {
   DbHelper._internal();
   static final DbHelper instance = DbHelper._internal();
 
-  static const int schemaVersion = 1;
+  static const int schemaVersion = 2;
 
   Database? _db;
 
@@ -47,8 +47,47 @@ class DbHelper {
             PRIMARY KEY (surah, ayah)
           )
         ''');
+        await _createPhase3Tables(db);
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await _createPhase3Tables(db);
+        }
       },
     );
+  }
+
+  Future<void> _createPhase3Tables(Database db) async {
+    // Phase 3: per-mistake log, feeding "frequently forgotten words",
+    // "weak ayahs", "weak Surahs" style queries below.
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS mistake_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        surah INTEGER NOT NULL,
+        ayah INTEGER NOT NULL,
+        word_index_in_ayah INTEGER,
+        error_type TEXT NOT NULL,
+        expected_word TEXT,
+        actual_word TEXT,
+        severity TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )
+    ''');
+    // Phase 3: one row per completed recitation-check session, for
+    // longer-term trend tracking beyond the per-verse summary already in
+    // verse_progress.
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS recitation_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        surah INTEGER NOT NULL,
+        start_ayah INTEGER NOT NULL,
+        end_ayah INTEGER NOT NULL,
+        word_accuracy REAL NOT NULL,
+        mistake_count INTEGER NOT NULL,
+        overall_score REAL NOT NULL,
+        created_at TEXT NOT NULL
+      )
+    ''');
   }
 
   Future<int> saveRecording({
@@ -161,5 +200,87 @@ class DbHelper {
       'averageAccuracy': avg,
       'versesLearned': learnedCount,
     };
+  }
+
+  // --- Phase 3: Memorization Intelligence ---
+
+  Future<void> recordMistake({
+    required int surah,
+    required int ayah,
+    int? wordIndexInAyah,
+    required String errorType,
+    String? expectedWord,
+    String? actualWord,
+    required String severity,
+  }) async {
+    final db = await database;
+    await db.insert('mistake_log', {
+      'surah': surah,
+      'ayah': ayah,
+      'word_index_in_ayah': wordIndexInAyah,
+      'error_type': errorType,
+      'expected_word': expectedWord,
+      'actual_word': actualWord,
+      'severity': severity,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+  }
+
+  Future<void> recordSession({
+    required int surah,
+    required int startAyah,
+    required int endAyah,
+    required double wordAccuracy,
+    required int mistakeCount,
+    required double overallScore,
+  }) async {
+    final db = await database;
+    await db.insert('recitation_sessions', {
+      'surah': surah,
+      'start_ayah': startAyah,
+      'end_ayah': endAyah,
+      'word_accuracy': wordAccuracy,
+      'mistake_count': mistakeCount,
+      'overall_score': overallScore,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+  }
+
+  /// Words that have been logged as a mistake (omission or substitution)
+  /// most often, most-frequent first. Useful for a "words to review" view.
+  Future<List<Map<String, dynamic>>> frequentlyMissedWords({int limit = 20}) async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT expected_word, surah, ayah, COUNT(*) as mistake_count
+      FROM mistake_log
+      WHERE expected_word IS NOT NULL
+      GROUP BY expected_word, surah, ayah
+      ORDER BY mistake_count DESC
+      LIMIT ?
+    ''', [limit]);
+  }
+
+  /// Ayahs with the most logged mistakes, most-frequent first.
+  Future<List<Map<String, dynamic>>> weakAyahs({int limit = 20}) async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT surah, ayah, COUNT(*) as mistake_count
+      FROM mistake_log
+      GROUP BY surah, ayah
+      ORDER BY mistake_count DESC
+      LIMIT ?
+    ''', [limit]);
+  }
+
+  /// Surahs with the most logged mistakes overall, most-frequent first.
+  Future<List<Map<String, dynamic>>> weakSurahs({int limit = 10}) async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT surah, COUNT(*) as mistake_count
+      FROM mistake_log
+      GROUP BY surah
+      ORDER BY mistake_count DESC
+      LIMIT ?
+    ''', [limit]);
   }
 }
