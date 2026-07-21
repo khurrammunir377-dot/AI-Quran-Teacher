@@ -1,91 +1,198 @@
-# Phase 2 Setup — Recitation Checking Backend
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
+import 'wav_utils.dart';
+import 'word_matcher.dart';
 
-Phase 2 needs a small server-side piece so your Groq API key never sits
-inside the app itself. This uses Supabase Edge Functions, since you've
-already used Supabase for ECOSTRUCT.
+const int kSampleRate = 16000;
+const int kNumChannels = 1;
+// ~2.5 seconds per chunk: short enough to feel responsive, long enough for
+// the speech model to have meaningful context. Tune this if latency numbers
+// from real testing suggest a different sweet spot.
+const int _chunkDurationMs = 2500;
+const int _bytesPerChunk = (kSampleRate * kNumChannels * 2 * _chunkDurationMs) ~/ 1000;
 
-## 1. Get a free Groq API key
+enum ChunkStatus { sending, ok, networkError }
 
-1. Go to https://console.groq.com and sign up (free tier available)
-2. Create an API key
-3. Keep it somewhere safe — you'll paste it once in step 4, never in the app
+class LiveCheckUpdate {
+  final WordMatchResult matchResult;
+  final ChunkStatus lastChunkStatus;
+  final int lastLatencyMs;
+  final bool newMistakeDetectedThisUpdate;
 
-## 2. Set up the Supabase CLI (one-time)
+  LiveCheckUpdate({
+    required this.matchResult,
+    required this.lastChunkStatus,
+    required this.lastLatencyMs,
+    required this.newMistakeDetectedThisUpdate,
+  });
+}
 
-If you don't already have a Supabase project for this app:
-1. Go to https://supabase.com, create a new project
-2. Note your **project reference** (the short ID in your project URL, e.g.
-   `abcdefghijklmnop`)
+/// Handles continuous listening during recitation: streams raw audio from the
+/// microphone, slices it into rolling chunks, sends each chunk to the
+/// recognition backend as it's captured, and incrementally updates the
+/// word-level match result as transcripts come back - while also saving the
+/// full session audio locally so playback keeps working exactly as in Phase 1.
+class RecitationCheckService {
+  final AudioRecorder _recorder = AudioRecorder();
+  StreamSubscription<Uint8List>? _subscription;
 
-On your computer (or in a GitHub Codespace / Cloud Shell if you don't have
-Node.js locally):
+  final List<int> _pendingChunkBuffer = [];
+  final List<int> _fullSessionBuffer = [];
+  final List<String> _recognizedWords = [];
 
-```bash
-npm install -g supabase
-supabase login
-```
+  String _endpointUrl = '';
+  List<String> _expectedWords = [];
 
-## 3. Link and deploy the function
+  final StreamController<LiveCheckUpdate> _updatesController =
+      StreamController<LiveCheckUpdate>.broadcast();
+  Stream<LiveCheckUpdate> get updates => _updatesController.stream;
 
-From inside the project folder (where the `supabase/` directory is):
+  bool _isActive = false;
+  bool get isActive => _isActive;
 
-```bash
-supabase link --project-ref YOUR_PROJECT_REF
-supabase functions deploy check-recitation --no-verify-jwt
-```
+  Future<bool> hasPermission() => _recorder.hasPermission();
 
-`--no-verify-jwt` is used here because the app doesn't have user login yet
-(Phase 1-2 scope) — it makes the endpoint callable without an auth token.
-**Note:** this means anyone with the URL could call it and use your Groq
-quota. That's an acceptable tradeoff for testing/early use, but before a
-public launch this should be locked down (e.g. requiring a Supabase auth
-token, or adding basic rate limiting) — flag this to me when you're ready
-for that.
+  Future<void> start({
+    required String endpointUrl,
+    required List<String> expectedWords,
+  }) async {
+    _endpointUrl = endpointUrl;
+    _expectedWords = expectedWords;
+    _pendingChunkBuffer.clear();
+    _fullSessionBuffer.clear();
+    _recognizedWords.clear();
+    _isActive = true;
 
-## 4. Set your Groq API key as a server-side secret
+    final stream = await _recorder.startStream(
+      const RecordConfig(
+        encoder: AudioEncoder.pcm16bits,
+        sampleRate: kSampleRate,
+        numChannels: kNumChannels,
+      ),
+    );
 
-```bash
-supabase secrets set GROQ_API_KEY=your_groq_key_here
-```
+    _subscription = stream.listen((chunk) {
+      _pendingChunkBuffer.addAll(chunk);
+      _fullSessionBuffer.addAll(chunk);
+      if (_pendingChunkBuffer.length >= _bytesPerChunk) {
+        final toSend = List<int>.from(_pendingChunkBuffer);
+        _pendingChunkBuffer.clear();
+        _sendChunk(toSend);
+      }
+    });
+  }
 
-This key now lives only on Supabase's servers — it's never in the app or
-in your GitHub repo.
+  Future<void> _sendChunk(List<int> pcmBytes) async {
+    if (_endpointUrl.isEmpty) return;
+    final wav = pcm16ToWav(
+      pcmBytes: pcmBytes,
+      sampleRate: kSampleRate,
+      numChannels: kNumChannels,
+    );
 
-## 5. Get your function's URL
+    final stopwatch = Stopwatch()..start();
+    try {
+      final response = await http
+          .post(
+            Uri.parse(_endpointUrl),
+            headers: {'Content-Type': 'audio/wav'},
+            body: wav,
+          )
+          .timeout(const Duration(seconds: 10));
+      stopwatch.stop();
 
-It will be:
+      if (response.statusCode != 200) {
+        _emitUpdate(ChunkStatus.networkError, stopwatch.elapsedMilliseconds);
+        return;
+      }
 
-```
-https://YOUR_PROJECT_REF.supabase.co/functions/v1/check-recitation
-```
+      final body = response.body;
+      String transcript = '';
+      try {
+        final decoded = jsonDecode(body) as Map<String, dynamic>;
+        transcript = (decoded['transcript'] as String?) ?? '';
+      } catch (_) {
+        // Malformed response - treat as an empty transcript for this chunk
+        // rather than crashing the session.
+      }
+      final newWords = tokenize(transcript);
 
-## 6. Configure the app
+      final previousCorrect = _currentMatchResult()?.correctCount ?? 0;
+      _recognizedWords.addAll(newWords);
+      final updatedResult = _currentMatchResult()!;
+      final newMistake = updatedResult.correctCount <= previousCorrect &&
+          updatedResult.expectedWordStatus.contains(WordStatus.wrong);
 
-1. Build and install the updated APK (same GitHub Actions process as before)
-2. Open the app → Settings → scroll to **Recognition Endpoint**
-3. Paste the URL from step 5 → tap **Save**
-4. Go to any verse → tap the mic button to start checking your recitation
+      _emitUpdate(ChunkStatus.ok, stopwatch.elapsedMilliseconds, newMistake: newMistake);
+    } catch (_) {
+      stopwatch.stop();
+      _emitUpdate(ChunkStatus.networkError, stopwatch.elapsedMilliseconds);
+    }
+  }
 
-## Testing checklist for Phase 2
+  WordMatchResult? _currentMatchResult() {
+    if (_expectedWords.isEmpty) return null;
+    return alignWords(expectedWords: _expectedWords, recognizedWords: _recognizedWords);
+  }
 
-- [ ] Tapping the mic button on the Recitation Screen prompts for
-      microphone permission (first time only)
-- [ ] While reciting, words in the ayah text turn green as you say them
-      correctly
-- [ ] Saying a wrong word turns it red, and you feel a vibration + hear a
-      short tone within a couple of seconds
-- [ ] Skipping a word shows it in orange once the app has moved past it
-- [ ] Stopping shows a final "X/Y words correct" summary
-- [ ] "Play Back" plays your full recitation for that verse
-- [ ] Recognition still fails gracefully (shows a connection message, does
-      not crash) if you turn off mobile data briefly mid-recitation
-- [ ] Settings → Your Progress shows updated stats after a few attempts
+  void _emitUpdate(ChunkStatus status, int latencyMs, {bool newMistake = false}) {
+    final result = _currentMatchResult();
+    if (result == null || _updatesController.isClosed) return;
+    _updatesController.add(LiveCheckUpdate(
+      matchResult: result,
+      lastChunkStatus: status,
+      lastLatencyMs: latencyMs,
+      newMistakeDetectedThisUpdate: newMistake,
+    ));
+  }
 
-## About cost and latency
+  /// Stops listening, flushes any leftover buffered audio as a final chunk,
+  /// saves the full session as a local WAV file, and returns its path plus
+  /// the final match result.
+  Future<(String filePath, WordMatchResult finalResult)> stop() async {
+    await _subscription?.cancel();
+    await _recorder.stop();
+    _isActive = false;
 
-Ask me to check current Groq pricing before you scale this to many users —
-pricing can change, and I'd rather verify it fresh than quote a number that
-might be stale by the time you read this. During testing, note the
-`latency_ms` value the function returns (visible if you check the Supabase
-function logs) — that's the real number to judge whether 2.5-second chunks
-feel responsive enough, or need to be shorter.
+    if (_pendingChunkBuffer.isNotEmpty) {
+      await _sendChunk(List<int>.from(_pendingChunkBuffer));
+      _pendingChunkBuffer.clear();
+    }
+
+    final dir = await getApplicationDocumentsDirectory();
+    final recordingsDir = Directory('${dir.path}/recordings');
+    if (!await recordingsDir.exists()) {
+      await recordingsDir.create(recursive: true);
+    }
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final path = '${recordingsDir.path}/session_$timestamp.wav';
+    final wav = pcm16ToWav(
+      pcmBytes: _fullSessionBuffer,
+      sampleRate: kSampleRate,
+      numChannels: kNumChannels,
+    );
+    await File(path).writeAsBytes(wav);
+
+    final finalResult = _currentMatchResult() ??
+        alignWords(expectedWords: _expectedWords, recognizedWords: const []);
+
+    return (path, finalResult);
+  }
+
+  Future<void> stopSafelyIfActive() async {
+    if (_isActive) {
+      await stop();
+    }
+  }
+
+  void dispose() {
+    _subscription?.cancel();
+    _recorder.dispose();
+    _updatesController.close();
+  }
+}

@@ -1,77 +1,162 @@
-# Hifz Companion — Phase 1 + Phase 2
+/// Status of a single expected word after aligning against what was recognized.
+enum WordStatus { pending, correct, wrong, missing }
 
-A free Quran memorization app. **Phase 1** (reading, navigation, audio
-recording) plus **Phase 2** (live recitation checking: continuous
-listening, word-level mistake detection, real-time interruption cue) are
-both included in this build.
+class WordMatchResult {
+  final List<WordStatus> expectedWordStatus; // one entry per expected word
+  final List<String?> recognizedWordForExpected; // what was heard at that
+  // position, if anything (for showing "you said X, expected Y")
+  final int extraWordCount; // spoken words that didn't align to any expected word
+  final int correctCount;
+  final int currentPosition; // index of the next expected word still pending
 
-**If you're setting up recitation checking for the first time, see
-[PHASE2_SETUP.md](PHASE2_SETUP.md) first** — it needs a small backend
-piece (Supabase + Groq) before the mic button on the Recitation Screen
-will do anything beyond recording.
+  WordMatchResult({
+    required this.expectedWordStatus,
+    required this.recognizedWordForExpected,
+    required this.extraWordCount,
+    required this.correctCount,
+    required this.currentPosition,
+  });
 
-## What's included
+  double get accuracy {
+    final total = expectedWordStatus.length;
+    if (total == 0) return 0;
+    return correctCount / total;
+  }
+}
 
-- Full, authentic Quran text (6,236 verses, 114 Surahs, all 30 Juz), sourced
-  from an established open Quran text dataset (Uthmani script) — bundled as
-  a local asset so the app works fully offline.
-- Home screen (30 Juz list + Continue Last Session)
-- Surah list per Juz
-- Recitation screen: Arabic text display, verse navigation, audio recording,
-  playback, re-record
-- Settings screen: font size, dark mode, reference-audio toggle placeholder,
-  Support This App placeholder
-- Local SQLite storage for recordings (offline, on-device only)
+/// Normalizes Arabic text for comparison: strips diacritics (tashkeel),
+/// normalizes alef variants, and removes punctuation, so minor recognizer
+/// differences in diacritics don't register as word-level mistakes (that is
+/// a Tajweed-level concern, handled separately, not a memorization mistake).
+///
+/// IMPORTANT: the bundled Quran text uses full Uthmani script, which
+/// includes Quranic-only annotation marks and letter forms (e.g. alef wasla
+/// "ٱ") that a standard speech-to-text model will never produce - it
+/// transcribes using plain modern Arabic forms instead. Every one of these
+/// must be normalized away on both sides of the comparison, or otherwise-
+/// correct recitation gets flagged as wrong purely due to script
+/// differences, not an actual mistake. This was a real bug found via live
+/// testing (see conversation history) - previously only standard
+/// diacritics were handled, missing alef wasla and Quranic-specific small
+/// marks, which caused near-universal false "wrong word" results.
+String normalizeArabic(String input) {
+  var text = input;
+  // Strip standard Arabic diacritics (harakat/tashkeel).
+  text = text.replaceAll(RegExp(r'[\u064B-\u065F\u0670]'), '');
+  // Strip Quranic-only small high/low annotation marks (sukun, small high
+  // seen, small high madda, small high yeh/noon, etc.) used throughout
+  // Uthmani script but never produced by standard Arabic ASR output.
+  text = text.replaceAll(RegExp(r'[\u0610-\u061A\u06D6-\u06DC\u06DF-\u06E4\u06E7-\u06E8\u06EA-\u06ED]'), '');
+  // Strip extended Arabic diacritic blocks (Quranic annotation, rare but
+  // present in some Uthmani text sources).
+  text = text.replaceAll(RegExp(r'[\u08D4-\u08E1\u08E3-\u08FF]'), '');
+  // Normalize all alef variants - INCLUDING alef wasla "ٱ" (U+0671), which
+  // is extremely common in Quranic text (e.g. ٱلرَّحْمَٰنِ, ٱللَّهِ) but is
+  // never how a speech-to-text model transcribes plain alef - to bare alef.
+  text = text.replaceAll(RegExp(r'[\u0622\u0623\u0625\u0671\u0672\u0673]'), '\u0627');
+  // Normalize alef maksura to yeh
+  text = text.replaceAll('\u0649', '\u064A');
+  // Remove tatweel (kashida)
+  text = text.replaceAll('\u0640', '');
+  // Strip punctuation/whitespace edges
+  text = text.trim();
+  return text;
+}
 
-## How the build works (same pattern as your UUDS app)
+List<String> tokenize(String text) {
+  return text
+      .split(RegExp(r'\s+'))
+      .map(normalizeArabic)
+      .where((w) => w.isNotEmpty)
+      .toList();
+}
 
-This repo does **not** commit the `android/` platform folder. Instead, the
-GitHub Actions workflow (`.github/workflows/build.yml`) generates it fresh
-on every build using `flutter create`, matched exactly to the Flutter
-version running in CI — then copies in the custom app icon and Android
-manifest (microphone permission, app name) from `android_overlay/`. This
-avoids the SDK-version-mismatch and stale-Gradle-file issues you hit on the
-last project, since the Android scaffold is never out of date with the
-Flutter version.
+/// Aligns the recognized words against the expected ayah words using a
+/// Levenshtein-style edit-distance alignment (Needleman-Wunsch), so each
+/// discrepancy is classified as correct / wrong / missing, with position.
+/// Spoken words that don't correspond to any expected word are counted as
+/// "extra" separately.
+WordMatchResult alignWords({
+  required List<String> expectedWords,
+  required List<String> recognizedWords,
+}) {
+  final m = expectedWords.length;
+  final n = recognizedWords.length;
 
-## Steps to build your APK
+  // dp[i][j] = min edit operations to align expected[0..i) with recognized[0..j)
+  final dp = List.generate(m + 1, (_) => List<int>.filled(n + 1, 0));
+  for (var i = 0; i <= m; i++) dp[i][0] = i;
+  for (var j = 0; j <= n; j++) dp[0][j] = j;
 
-1. **Create a new GitHub repository** (e.g. `hifz-companion`)
-2. **Upload all these files**, keeping the folder structure exactly as-is
-   (unzip and push, or upload via GitHub's web uploader — just make sure
-   `.github/workflows/build.yml` ends up at that exact path)
-3. Go to the **Actions** tab in your repo — the workflow will run
-   automatically on push to `main` (or trigger it manually via
-   "Run workflow" if it doesn't auto-start)
-4. Wait for the build to finish (~5-8 minutes for the first run)
-5. Click the completed run → under **Artifacts**, download
-   `hifz-companion-apk`
-6. Unzip that download to get `app-release.apk`
-7. Transfer it to your phone (WhatsApp/email/USB) and install
-   (you may need to allow "install from unknown sources" once)
+  for (var i = 1; i <= m; i++) {
+    for (var j = 1; j <= n; j++) {
+      if (expectedWords[i - 1] == recognizedWords[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1];
+      } else {
+        final substitution = dp[i - 1][j - 1] + 1;
+        final deletion = dp[i - 1][j] + 1; // expected word missing
+        final insertion = dp[i][j - 1] + 1; // extra spoken word
+        dp[i][j] = [substitution, deletion, insertion].reduce((a, b) => a < b ? a : b);
+      }
+    }
+  }
 
-## Testing checklist once installed
+  // Backtrack to build the alignment
+  final expectedStatus = List<WordStatus>.filled(m, WordStatus.missing);
+  final recognizedForExpected = List<String?>.filled(m, null);
+  var extraCount = 0;
+  var correctCount = 0;
 
-- [ ] App opens and shows the 30 Juz list
-- [ ] Tapping a Juz shows the correct Surahs
-- [ ] Tapping a Surah opens the Recitation screen at Ayah 1
-- [ ] Arabic text displays correctly, right-to-left
-- [ ] Mic permission prompt appears on first recording attempt
-- [ ] Recording button works: starts, shows timer, stops
-- [ ] Playback plays back exactly what was recorded
-- [ ] Re-record and Next Verse buttons work
-- [ ] Settings: font size and dark mode changes apply
-- [ ] Closing and reopening the app keeps your last session (Continue card)
-- [ ] App works with phone in airplane mode (fully offline)
+  var i = m, j = n;
+  final ops = <String>[]; // for backtracking order (reversed)
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && expectedWords[i - 1] == recognizedWords[j - 1] && dp[i][j] == dp[i - 1][j - 1]) {
+      expectedStatus[i - 1] = WordStatus.correct;
+      recognizedForExpected[i - 1] = recognizedWords[j - 1];
+      correctCount++;
+      i--;
+      j--;
+    } else if (i > 0 && j > 0 && dp[i][j] == dp[i - 1][j - 1] + 1) {
+      expectedStatus[i - 1] = WordStatus.wrong;
+      recognizedForExpected[i - 1] = recognizedWords[j - 1];
+      i--;
+      j--;
+    } else if (i > 0 && dp[i][j] == dp[i - 1][j] + 1) {
+      expectedStatus[i - 1] = WordStatus.missing;
+      i--;
+    } else {
+      // insertion - extra spoken word not matching any expected word
+      extraCount++;
+      j--;
+    }
+    ops.add(''); // placeholder, order not otherwise needed
+  }
 
-## If the build fails
+  // Find how far into the ayah the recitation has progressed: the last
+  // expected word that has a non-pending status, +1. Words after that are
+  // still "pending" (not yet reached), not "missing" - only backtrack marks
+  // trailing words as missing if the recognizer has clearly moved past them
+  // (i.e. recognizedWords is non-empty and alignment placed later words
+  // after them). We approximate "pending" as: any run of missing words at
+  // the very end of the ayah, beyond the recognized content, is pending
+  // rather than a mistake, since the user simply hasn't recited them yet.
+  var lastNonMissingFromEnd = m; // exclusive index
+  for (var k = m - 1; k >= 0; k--) {
+    if (expectedStatus[k] != WordStatus.missing) {
+      lastNonMissingFromEnd = k + 1;
+      break;
+    }
+    lastNonMissingFromEnd = k;
+  }
+  for (var k = lastNonMissingFromEnd; k < m; k++) {
+    expectedStatus[k] = WordStatus.pending;
+  }
 
-Open the failed Actions run and check which step failed — paste me the
-error output and I'll fix it. Common first-run issues are usually version
-mismatches between the pinned package versions in `pubspec.yaml` and what's
-currently on pub.dev; those are quick fixes.
-
-## Next step
-
-Once you've checked everything above on your real phone, come back and I'll
-give you the Phase 2 prompt/code (word-level mistake detection).
+  return WordMatchResult(
+    expectedWordStatus: expectedStatus,
+    recognizedWordForExpected: recognizedForExpected,
+    extraWordCount: extraCount,
+    correctCount: correctCount,
+    currentPosition: lastNonMissingFromEnd,
+  );
+}
